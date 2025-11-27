@@ -3,6 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { getPool, sql } = require('../config/db');
+const gradeAllWithAI = require('../services/grading/aiGrader');
 
 router.post('/init-exam', async (req, res) => {
     const { studentId } = req.body;
@@ -42,29 +43,80 @@ router.post('/run-query', async (req, res) => {
         const request = new sql.Request(transaction);
         try {
             let resultData = null, metadata = null;
+
             if (question.type === 'QUERY_SELECT') {
                 const resRun = await request.query(runScript);
                 resultData = resRun.recordset;
-            } else { await request.query(runScript); }
+            } else {
+                await request.query(runScript);
+            }
 
             if (question.type === 'DDL_CREATE') {
-                const tableName = question.verification_script;
-                const metaRes = await request.query(`
-          SELECT c.COLUMN_NAME, c.DATA_TYPE, CASE WHEN k.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END as IS_PK
-          FROM INFORMATION_SCHEMA.COLUMNS c LEFT JOIN (
-            SELECT ku.TABLE_SCHEMA, ku.TABLE_NAME, ku.COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE as ku
-            WHERE ku.CONSTRAINT_NAME LIKE 'PK%'
-          ) as k ON c.TABLE_NAME = k.TABLE_NAME AND c.COLUMN_NAME = k.COLUMN_NAME
-          WHERE c.TABLE_SCHEMA = '${schemaName}' AND c.TABLE_NAME = '${tableName}'
-        `);
-                metadata = metaRes.recordset;
+                // Xử lý NHIỀU BẢNG - verification_script chứa danh sách bảng cách nhau bởi dấu phẩy
+                const tableNames = question.verification_script.split(',').map(t => t.trim());
+                metadata = [];
+
+                for (const tableName of tableNames) {
+                    try {
+                        const metaRes = await request.query(`
+                            SELECT DISTINCT
+                                '${tableName}' as TABLE_NAME,
+                                c.COLUMN_NAME, 
+                                c.DATA_TYPE, 
+                                c.CHARACTER_MAXIMUM_LENGTH,
+                                c.ORDINAL_POSITION,
+                                CASE WHEN EXISTS (
+                                    SELECT 1 
+                                    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku
+                                    JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc 
+                                        ON ku.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+                                    WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+                                        AND ku.TABLE_SCHEMA = '${schemaName}'
+                                        AND ku.TABLE_NAME = '${tableName}'
+                                        AND ku.COLUMN_NAME = c.COLUMN_NAME
+                                ) THEN 1 ELSE 0 END as IS_PK
+                            FROM INFORMATION_SCHEMA.COLUMNS c
+                            WHERE c.TABLE_SCHEMA = '${schemaName}' 
+                                AND c.TABLE_NAME = '${tableName}'
+                            ORDER BY c.ORDINAL_POSITION
+                        `);
+
+                        if (metaRes.recordset.length > 0) {
+                            metadata = metadata.concat(metaRes.recordset);
+                        }
+                    } catch (e) {
+                        console.log(`Table ${tableName} not found or error:`, e.message);
+                    }
+                }
+
             } else if (question.type === 'DML_INSERT') {
-                try {
-                    const tableName = question.expected_sql.match(/INSERT INTO\s+([^\s(]+)/i)?.[1] || question.expected_sql;
-                    const dataRes = await request.query(`SELECT * FROM [${schemaName}].[${tableName.replace(/[\[\]]/g, '')}]`);
-                    resultData = dataRes.recordset;
-                } catch(e) {}
+                // Xử lý NHIỀU BẢNG - lấy tất cả bảng từ expected_sql
+                const insertStatements = question.expected_sql.match(/INSERT INTO\s+(\w+)/gi) || [];
+                const tableNames = [...new Set(insertStatements.map(stmt => {
+                    const match = stmt.match(/INSERT INTO\s+(\w+)/i);
+                    return match ? match[1] : null;
+                }))].filter(Boolean);
+
+                resultData = {};
+
+                for (const tableName of tableNames) {
+                    try {
+                        const dataRes = await request.query(`SELECT * FROM [${schemaName}].[${tableName}]`);
+                        resultData[tableName] = {
+                            rows: dataRes.recordset,
+                            count: dataRes.recordset.length
+                        };
+                    } catch (e) {
+                        console.log(`Table ${tableName} not found or error:`, e.message);
+                        resultData[tableName] = {
+                            rows: [],
+                            count: 0,
+                            error: e.message
+                        };
+                    }
+                }
             }
+
             await transaction.commit();
             res.json({ success: true, message: "Query executed.", data: resultData, schema: metadata });
         } catch (execErr) {
@@ -77,41 +129,45 @@ router.post('/run-query', async (req, res) => {
 });
 
 router.post('/submit-exam', async (req, res) => {
-    const { studentId } = req.body;
+    const { studentId, answers } = req.body;
     const schemaName = `exam_sv_${studentId}`;
     try {
         const pool = await getPool();
         const questions = (await pool.request().query('SELECT * FROM questions ORDER BY id')).recordset;
-        let totalScore = 0, details = [];
-        for (const q of questions) {
-            let score = 0, status = "Failed";
-            const transaction = new sql.Transaction(pool);
-            await transaction.begin();
-            const reqCheck = new sql.Request(transaction);
-            try {
-                if (q.type === 'DDL_CREATE') {
-                    const check = await reqCheck.query(`SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='${schemaName}' AND TABLE_NAME='${q.verification_script}'`);
-                    if (check.recordset.length > 0) score = 10;
-                } else if (q.type === 'DML_INSERT') {
-                    const tblMatch = q.expected_sql.match(/INSERT INTO\s+([^\s(]+)/i);
-                    const tbl = tblMatch ? tblMatch[1] : 'UnknownTable';
-                    const cnt = await reqCheck.query(`SELECT COUNT(*) as c FROM [${schemaName}].[${tbl.replace(/[\[\]]/g, '')}]`);
-                    if (cnt.recordset[0].c >= parseInt(q.verification_script)) score = 10;
-                } else if (q.type === 'QUERY_SELECT') { score = 10; }
-                else if (q.type === 'FUNC_PROC') {
-                    await reqCheck.query(q.verification_script.replace(/@SCHEMA/g, `[${schemaName}]`));
-                    score = 10;
-                }
-                if (score > 0) status = "Passed";
-                await transaction.commit();
-            } catch (e) { await transaction.rollback(); status = `Failed: ${e.message}`; }
-            totalScore += score;
-            details.push({ questionId: q.id, title: q.title, score, status });
-        }
+
+        // Gắn studentSql từ frontend vào questions
+        const questionsWithAnswers = questions.map(q => {
+            const answer = answers?.find(a => a.questionId === q.id);
+            return {
+                ...q,
+                studentSql: answer?.studentSql || ''
+            };
+        });
+
+        // Chấm bằng AI - Gọi 1 lần cho tất cả câu
+        console.log('Grading with AI...');
+        console.log('Student answers:', JSON.stringify(answers, null, 2));
+        const aiResults = await gradeAllWithAI(pool, schemaName, questionsWithAnswers);
+
+        let totalScore = 0;
+        const details = aiResults.map(result => {
+            const question = questions.find(q => q.id === result.questionId);
+            const answer = answers?.find(a => a.questionId === result.questionId);
+            totalScore += result.score;
+
+            return {
+                questionId: result.questionId,
+                title: question ? question.title : 'Unknown',
+                score: result.score,
+                maxScore: result.maxScore,
+                feedback: result.feedback,
+                status: result.status,
+                studentSql: answer?.studentSql || ''
+            };
+        });
+
         res.json({ success: true, totalScore, details });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
-});
-
-module.exports = router;
+}); module.exports = router;

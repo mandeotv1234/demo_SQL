@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import { API_URL } from '../config';
 
-export default function QuestionRunner({ question, index, studentId }) {
+export default function QuestionRunner({ question, index, studentId, onSqlChange }) {
     const [sqlCode, setSqlCode] = useState('');
     const [output, setOutput] = useState(null);
     const [loading, setLoading] = useState(false);
@@ -38,7 +38,10 @@ export default function QuestionRunner({ question, index, studentId }) {
                         className="flex-1 w-full bg-[#1e1e1e] text-green-400 font-mono p-4 resize-none focus:outline-none text-sm leading-6"
                         placeholder="-- Viết lệnh SQL Server tại đây..."
                         value={sqlCode}
-                        onChange={e => setSqlCode(e.target.value)}
+                        onChange={e => {
+                            setSqlCode(e.target.value);
+                            onSqlChange && onSqlChange(question.id, e.target.value);
+                        }}
                     />
                     <div className="p-3 bg-gray-100 border-t">
                         <button
@@ -74,26 +77,96 @@ export default function QuestionRunner({ question, index, studentId }) {
                                     ✔ {output.message}
                                 </div>
 
+                                {/* DDL_CREATE - Hiển thị NHIỀU BẢNG */}
                                 {output.schema && output.schema.length > 0 && (
-                                    <div className="border border-gray-800 rounded shadow-lg w-64 mx-auto mt-4 bg-white">
-                                        <div className="bg-gray-200 border-b border-gray-800 p-2 font-bold text-center text-sm">
-                                            {question.verificationScript}
-                                        </div>
-                                        <div className="p-2 text-sm space-y-1">
-                                            {output.schema.map((col, i) => (
-                                                <div key={i} className="flex items-center gap-2 border-b border-dotted last:border-0 pb-1">
-                                                    <span className="w-4 flex justify-center">
-                                                        {col.IS_PK === 1 ? <span className="text-yellow-500 text-xs">🔑</span> : ''}
-                                                    </span>
-                                                    <span className="font-semibold text-gray-800">{col.COLUMN_NAME}</span>
-                                                    <span className="text-xs text-gray-500 ml-auto">{col.DATA_TYPE}</span>
+                                    <div className="space-y-4">
+                                        {(() => {
+                                            // Group columns by TABLE_NAME
+                                            const tableGroups = output.schema.reduce((acc, col) => {
+                                                const tableName = col.TABLE_NAME || 'Unknown';
+                                                if (!acc[tableName]) acc[tableName] = [];
+                                                acc[tableName].push(col);
+                                                return acc;
+                                            }, {});
+
+                                            return Object.entries(tableGroups).map(([tableName, columns]) => (
+                                                <div key={tableName} className="border border-gray-800 rounded shadow-lg bg-white">
+                                                    <div className="bg-blue-600 text-white border-b border-gray-800 p-2 font-bold text-center text-sm">
+                                                        {tableName}
+                                                    </div>
+                                                    <div className="p-2 text-sm space-y-1">
+                                                        {columns.map((col, i) => (
+                                                            <div key={i} className="flex items-center gap-2 border-b border-dotted last:border-0 pb-1">
+                                                                <span className="w-4 flex justify-center">
+                                                                    {col.IS_PK === 1 ? <span className="text-yellow-500 text-xs">🔑</span> : ''}
+                                                                </span>
+                                                                <span className="font-semibold text-gray-800">{col.COLUMN_NAME}</span>
+                                                                <span className="text-xs text-gray-500 ml-auto">
+                                                                    {col.DATA_TYPE}
+                                                                    {col.CHARACTER_MAXIMUM_LENGTH ? `(${col.CHARACTER_MAXIMUM_LENGTH})` : ''}
+                                                                </span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
                                                 </div>
-                                            ))}
-                                        </div>
+                                            ));
+                                        })()}
                                     </div>
                                 )}
 
-                                {output.data && output.data.length > 0 && (
+                                {/* DML_INSERT - Hiển thị NHIỀU BẢNG với data */}
+                                {output.data && typeof output.data === 'object' && !Array.isArray(output.data) && (
+                                    <div className="space-y-4">
+                                        {Object.entries(output.data).map(([tableName, tableData]) => (
+                                            <div key={tableName} className="border rounded shadow-sm">
+                                                <div className="bg-blue-600 text-white p-2 font-bold text-sm flex justify-between items-center">
+                                                    <span>{tableName}</span>
+                                                    <span className="text-xs bg-blue-700 px-2 py-1 rounded">
+                                                        {tableData.count || 0} rows
+                                                    </span>
+                                                </div>
+                                                
+                                                {tableData.error ? (
+                                                    <div className="p-3 text-red-600 text-sm">
+                                                        ⚠ {tableData.error}
+                                                    </div>
+                                                ) : tableData.rows && tableData.rows.length > 0 ? (
+                                                    <div className="overflow-x-auto">
+                                                        <table className="min-w-full divide-y divide-gray-200 text-sm">
+                                                            <thead className="bg-gray-100">
+                                                                <tr>
+                                                                    {Object.keys(tableData.rows[0]).map(key => (
+                                                                        <th key={key} className="px-3 py-2 text-left font-bold text-gray-600 uppercase tracking-wider">
+                                                                            {key}
+                                                                        </th>
+                                                                    ))}
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="bg-white divide-y divide-gray-200">
+                                                                {tableData.rows.map((row, i) => (
+                                                                    <tr key={i} className="hover:bg-gray-50">
+                                                                        {Object.values(row).map((val, j) => (
+                                                                            <td key={j} className="px-3 py-2 whitespace-nowrap text-gray-700">
+                                                                                {val === null ? 'NULL' : val.toString()}
+                                                                            </td>
+                                                                        ))}
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                ) : (
+                                                    <div className="p-3 text-gray-500 text-sm italic">
+                                                        Chưa có dữ liệu
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {/* QUERY_SELECT - Hiển thị kết quả query (array) */}
+                                {output.data && Array.isArray(output.data) && output.data.length > 0 && (
                                     <div className="overflow-x-auto border rounded shadow-sm">
                                         <table className="min-w-full divide-y divide-gray-200 text-sm">
                                             <thead className="bg-gray-100">
@@ -115,7 +188,7 @@ export default function QuestionRunner({ question, index, studentId }) {
                                             ))}
                                             </tbody>
                                         </table>
-                                        <div className="mt-2 text-xs text-gray-500 text-right">
+                                        <div className="p-2 text-xs text-gray-500 text-right bg-gray-50">
                                             Total rows: {output.data.length}
                                         </div>
                                     </div>

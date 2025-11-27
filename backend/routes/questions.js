@@ -10,6 +10,8 @@ router.get('/questions', async (req, res) => {
     try {
         const pool = await getPool();
         const result = await pool.request().query('SELECT * FROM questions ORDER BY id');
+        console.log("Fetched questions:", result.recordset.length);
+        console.log(result.recordset);
         res.json(result.recordset);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -39,51 +41,124 @@ router.post('/upload-questions', upload.single('file'), async (req, res) => {
     if (!genAI) return res.status(500).json({ error: "AI Key chưa được cấu hình trong server." });
 
     try {
-        // 1. Đọc text từ PDF
-        const dataBuffer = req.file.buffer;
-        const pdfData = await parsePdf(dataBuffer);
-        const pdfText = pdfData.text || '';
+        console.log("PDF received. Sending directly to AI...");
 
-        console.log("PDF Content extracted. Sending to AI...");
+        // 1. Chuyển PDF buffer sang base64
+        const pdfBase64 = req.file.buffer.toString('base64');
 
-        // 2. Gọi Gemini AI để phân tích
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        // 2. Gọi Gemini AI với file PDF trực tiếp
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
 
         const prompt = `
-            You are a SQL Server Exam Generator. Based on the following text extracted from a PDF (which contains titles of questions), 
-            generate a JSON Array of exam questions.
-            
-            Context: A Car Rental System (Tables: Xe, NhanVien, KhachHang, ThueXe...).
-            Input Text: "${pdfText}"
+            You are a STRICT SQL Server Exam Question Generator.
 
-            Output Requirements (Strict JSON Array):
-            1. title: The question title.
-            2. type: Must be one of ['DDL_CREATE', 'DML_INSERT', 'QUERY_SELECT', 'FUNC_PROC'].
-            3. content: A creative, full word problem description based on the title.
-            4. expected_sql: The correct T-SQL solution.
-            5. verification_script: 
-               - If type is DDL_CREATE: Just the Table Name (e.g., 'Xe').
-               - If type is DML_INSERT: Just the minimum number of rows (e.g., '3').
-               - If type is FUNC_PROC/TRIGGER: A T-SQL script to TEST the logic (use @SCHEMA placeholder).
-               - If type is QUERY_SELECT: Keep it empty string.
+            INPUT: A PDF containing SQL Server exam questions with database schema and requirements.
 
-            Example format:
-            [
-              {"title": "Tạo bảng Xe", "type": "DDL_CREATE", "content": "...", "expected_sql": "CREATE TABLE...", "verification_script": "Xe"},
-              {"title": "Thêm xe", "type": "DML_INSERT", "content": "...", "expected_sql": "INSERT...", "verification_script": "3"}
-            ]
+            OUTPUT: A JSON array of question objects. NO MARKDOWN. NO EXPLANATIONS. ONLY THE JSON ARRAY.
+
+            TASK STEPS:
+            1. If the PDF contains multiple exam codes (e.g., "Đề 1000", "Đề 1010"):
+            - Extract ONLY the FIRST exam code section
+            - Ignore all other exam codes completely
+
+            2. From that exam section, extract:
+            - Database schema (table names, columns, data types, constraints)
+            - Exam requirements (usually 5 questions)
+
+            3. For EACH exam requirement, generate ONE question object with these fields:
+
+            {
+            "title": "<Brief question title based on requirement>",
+            "type": "<ONE of: DDL_CREATE | DML_INSERT | QUERY_SELECT | FUNC_PROC>",
+            "content": "<Full problem description - use ONLY info from PDF, do NOT invent anything>",
+            "expected_sql": "<Correct T-SQL solution using schema from PDF>",
+            "verification_script": "<See rules below>"
+            }
+
+            VERIFICATION_SCRIPT RULES - READ EVERY WORD:
+
+            A) For DDL_CREATE type - EXTREMELY IMPORTANT:
             
-            ONLY RETURN THE JSON ARRAY. NO MARKDOWN.
+            STEP 1: Write your expected_sql first
+            STEP 2: Count CREATE TABLE statements in expected_sql
+            STEP 3: Extract the table name from EACH CREATE TABLE statement
+            STEP 4: Join ALL table names with commas (no spaces)
+            
+            EXAMPLES TO FOLLOW:
+            
+            Example 1:
+            expected_sql contains:
+                CREATE TABLE GIAITHUONG(...)
+                CREATE TABLE LETRAOGIAI(...)
+                CREATE TABLE PHIM(...)
+            → verification_script MUST BE: "GIAITHUONG,LETRAOGIAI,PHIM"
+            ❌ WRONG: "PHIM"
+            ❌ WRONG: "GIAITHUONG"
+            ✅ CORRECT: "GIAITHUONG,LETRAOGIAI,PHIM"
+            
+            Example 2:
+            expected_sql contains:
+                CREATE TABLE Students(...)
+            → verification_script MUST BE: "Students"
+            ✅ CORRECT: "Students"
+            
+            Example 3:
+            expected_sql contains:
+                CREATE TABLE A(...)
+                CREATE TABLE B(...)
+            → verification_script MUST BE: "A,B"
+            ❌ WRONG: "B"
+            ✅ CORRECT: "A,B"
+
+            B) For DML_INSERT type:
+            - verification_script = minimum number of rows to insert (e.g., "5")
+
+            C) For QUERY_SELECT type:
+            - verification_script = ""
+
+            D) For FUNC_PROC type:
+            - verification_script = SQL test script using @SCHEMA placeholder
+
+            SELF-CHECK BEFORE RETURNING JSON:
+            For each DDL_CREATE question, ask yourself:
+            "Did I list EVERY table name from my expected_sql in verification_script?"
+            If NO → Fix it!
+
+            CONSTRAINTS:
+            - Use ONLY table names, column names, data types from the PDF
+            - Do NOT invent new tables, columns, or requirements
+            - Do NOT use examples from previous conversations
+            - If PDF data is insufficient, return: {"error": "PDF data insufficient"}
+
+            OUTPUT FORMAT: Pure JSON array. No \`\`\`json\`\`\` markers.
         `;
 
-        const result = await model.generateContent(prompt);
+        const result = await model.generateContent([
+            {
+                inlineData: {
+                    mimeType: 'application/pdf',
+                    data: pdfBase64
+                }
+            },
+            { text: prompt }
+        ]);
+
         const response = await result.response;
+
+        console.log("AI Response received. Parsing...");
+        console.log(response.text());
+
         let text = response.text();
 
         // Clean JSON string
         text = text.replace(/```json/g, '').replace(/```/g, '').trim();
 
         const questions = JSON.parse(text);
+
+        // Check for error response
+        if (questions.error) {
+            return res.status(400).json({ error: questions.error });
+        }
 
         // 3. Lưu vào Database
         const pool = await getPool();
@@ -92,7 +167,6 @@ router.post('/upload-questions', upload.single('file'), async (req, res) => {
 
         try {
             for (const q of questions) {
-                // FIX: Tạo request mới cho mỗi vòng lặp và dùng tham số chuẩn
                 const request = new sql.Request(transaction);
                 await request
                     .input('title', sql.NVarChar, q.title)

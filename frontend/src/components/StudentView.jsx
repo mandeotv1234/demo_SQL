@@ -9,6 +9,7 @@ export default function StudentView() {
     const [questions, setQuestions] = useState([]);
     const [isInit, setIsInit] = useState(false);
     const [submitResult, setSubmitResult] = useState(null);
+    const [studentAnswers, setStudentAnswers] = useState({});
 
     useEffect(() => {
         axios.get(`${API_URL}/questions`).then(res => setQuestions(res.data));
@@ -21,10 +22,28 @@ export default function StudentView() {
         } catch (e) { alert("Lỗi init: " + e.message); }
     };
 
+    const handleSqlChange = (questionId, sqlCode) => {
+        setStudentAnswers(prev => ({
+            ...prev,
+            [questionId]: sqlCode
+        }));
+    };
+
     const handleSubmitExam = async () => {
         if (!confirm("Bạn có chắc chắn muốn nộp bài? Hành động này sẽ tính điểm cuối cùng.")) return;
         try {
-            const res = await axios.post(`${API_URL}/submit-exam`, { studentId });
+            // Chuẩn bị dữ liệu gửi lên BE
+            const submissionData = {
+                studentId,
+                answers: questions.map(q => ({
+                    questionId: q.id,
+                    questionTitle: q.title,
+                    questionType: q.type,
+                    studentSql: studentAnswers[q.id] || ''
+                }))
+            };
+            
+            const res = await axios.post(`${API_URL}/submit-exam`, submissionData);
             setSubmitResult(res.data);
         } catch (e) { alert("Lỗi nộp bài: " + e.message); }
     };
@@ -52,7 +71,13 @@ export default function StudentView() {
 
             <div className="space-y-10">
                 {questions.map((q, idx) => (
-                    <QuestionRunner key={q.id} question={q} index={idx + 1} studentId={studentId} />
+                    <QuestionRunner 
+                        key={q.id} 
+                        question={q} 
+                        index={idx + 1} 
+                        studentId={studentId}
+                        onSqlChange={handleSqlChange}
+                    />
                 ))}
             </div>
 

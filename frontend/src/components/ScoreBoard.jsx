@@ -12,16 +12,34 @@ export default function ScoreBoard({ result, studentId }) {
 
             <div className="text-left bg-gray-50 rounded-lg p-6 border">
                 <h3 className="font-bold text-gray-700 mb-4 border-b pb-2">Chi tiết từng câu:</h3>
-                <div className="space-y-3">
+                <div className="space-y-6">
                     {result.details.map((d, i) => (
-                        <div key={i} className="flex justify-between items-center bg-white p-3 rounded shadow-sm border border-gray-100">
-                            <div>
-                                <span className="font-bold text-gray-800 mr-2">Câu {d.questionId}:</span>
-                                <span className="text-gray-600">{d.title}</span>
+                        <div key={i} className="bg-white p-4 rounded shadow-sm border border-gray-200">
+                            <div className="flex justify-between items-start mb-3">
+                                <div className="flex-1">
+                                    <span className="font-bold text-gray-800 mr-2">Câu {d.questionId}:</span>
+                                    <span className="text-gray-600">{d.title}</span>
+                                </div>
+                                <div className={`font-bold px-3 py-1 rounded text-sm whitespace-nowrap ml-4 ${
+                                    d.status === 'Passed' ? 'bg-green-100 text-green-700' : 
+                                    d.status === 'Failed' ? 'bg-red-100 text-red-700' : 
+                                    'bg-gray-100 text-gray-700'
+                                }`}>
+                                    {d.score.toFixed(2)}/{d.maxScore}đ
+                                </div>
                             </div>
-                            <div className={`font-bold px-3 py-1 rounded text-sm ${d.score > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                {d.score > 0 ? 'Đạt (10đ)' : '0đ'}
-                            </div>
+                            
+                            {/* Feedback chi tiết */}
+                            {d.feedback && d.feedback.length > 0 && (
+                                <div className="mt-2 bg-gray-50 p-3 rounded border border-gray-200">
+                                    <div className="text-xs font-bold text-gray-500 uppercase mb-2">Nhận xét:</div>
+                                    <div className="space-y-1 text-sm text-gray-700">
+                                        {d.feedback.map((fb, idx) => (
+                                            <div key={idx} className="leading-relaxed">{fb}</div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     ))}
                 </div>
