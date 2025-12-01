@@ -1,5 +1,8 @@
 // Stress test: one-student-one-schema approach
-// Usage: node tools/stressTestSchema.js --count=150 --concurrency=50 --rows=10 --verbose --logFile=./schema_results.jsonl
+// Usage:
+// 1) Pre-create schemas separately (recommended for large runs) with createSchemas.js
+// 2) Run this script to perform inserts+queries (set --skipCreate to avoid re-creating schemas)
+// Example: node tools/stressTestSchema.js --count=150 --concurrency=50 --rows=10 --skipCreate --logFile=./schema_results.jsonl
 
 const { getPool, sql } = require('../config/db');
 const argv = require('minimist')(process.argv.slice(2));
@@ -8,6 +11,7 @@ const fs = require('fs');
 const TOTAL = parseInt(argv.count || argv.c || '100', 10);
 const CONCURRENCY = parseInt(argv.concurrency || argv.p || argv.con || '50', 10);
 const INSERT_ROWS = parseInt(argv.rows || '10', 10);
+const SKIP_SCHEMA_CREATION = !!(argv.skipCreate || argv.onlyRun || argv.skc);
 const VERBOSE_THRESHOLD = parseInt(process.env.VERBOSE_THRESHOLD || '200', 10);
 const VERBOSE = !!(argv.verbose || argv.v) || TOTAL <= VERBOSE_THRESHOLD;
 const LOG_FILE = argv.logFile || argv.logfile || argv.lf || './stressTestSchema_results.jsonl';
@@ -37,13 +41,15 @@ async function setupAndTestSchema(studentId, pool) {
   // start a transaction scoped to this schema's operations
   const tx = new sql.Transaction(pool);
   try {
-    await ensureSchema(pool, schema, user);
+    if (!SKIP_SCHEMA_CREATION) {
+      await ensureSchema(pool, schema, user);
+    }
 
     await tx.begin();
-    const req = new sql.Request(tx);
+    // Use a fresh Request for each parameterized query to avoid duplicate parameter names
 
     // create tables in that schema
-    await req.query(`
+    await new sql.Request(tx).query(`
       IF OBJECT_ID('${schema}.Departments','U') IS NULL
       CREATE TABLE ${schema}.Departments (
         id INT IDENTITY(1,1) PRIMARY KEY,
@@ -83,7 +89,7 @@ async function setupAndTestSchema(studentId, pool) {
     const deptIds = [];
     for (let d = 0; d < deptNames.length; d++) {
       const nameVal = `${deptNames[d]} - ${studentId}`;
-      const resDept = await req.input('dname', sql.NVarChar(200), nameVal)
+      const resDept = await new sql.Request(tx).input('dname', sql.NVarChar(200), nameVal)
         .input('loc', sql.NVarChar(200), `Location-${d+1}`)
         .query(`
           IF NOT EXISTS (SELECT 1 FROM ${schema}.Departments WHERE name = @dname)
@@ -91,7 +97,7 @@ async function setupAndTestSchema(studentId, pool) {
         `);
       let id = resDept.recordset?.[0]?.id;
       if (!id) {
-        const sel = await req.input('dnameSel', sql.NVarChar(200), nameVal).query(`SELECT id FROM ${schema}.Departments WHERE name = @dnameSel;`);
+        const sel = await new sql.Request(tx).input('dnameSel', sql.NVarChar(200), nameVal).query(`SELECT id FROM ${schema}.Departments WHERE name = @dnameSel;`);
         id = sel.recordset?.[0]?.id;
       }
       if (id) deptIds.push(id);
@@ -101,7 +107,7 @@ async function setupAndTestSchema(studentId, pool) {
     const projectIds = [];
     for (let p = 0; p < 2; p++) {
       const pname = `Project_${studentId}_${p}`;
-      const pres = await req.input('pname', sql.NVarChar(200), pname)
+      const pres = await new sql.Request(tx).input('pname', sql.NVarChar(200), pname)
         .input('budget', sql.Decimal(18,2), 100000.00 + p * 50000)
         .input('sdate', sql.DateTime2, new Date())
         .query(`
@@ -110,7 +116,7 @@ async function setupAndTestSchema(studentId, pool) {
         `);
       let pid = pres.recordset?.[0]?.id;
       if (!pid) {
-        const selP = await req.input('pnameSel', sql.NVarChar(200), pname).query(`SELECT id FROM ${schema}.Projects WHERE name = @pnameSel;`);
+        const selP = await new sql.Request(tx).input('pnameSel', sql.NVarChar(200), pname).query(`SELECT id FROM ${schema}.Projects WHERE name = @pnameSel;`);
         pid = selP.recordset?.[0]?.id;
       }
       if (pid) projectIds.push(pid);
@@ -130,7 +136,7 @@ async function setupAndTestSchema(studentId, pool) {
       const email = `${name}@example.com`;
       const deptId = deptIds[r % deptIds.length];
 
-      const empRes = await req
+      const empRes = await new sql.Request(tx)
         .input('deptId', sql.Int, deptId)
         .input('name', sql.NVarChar(200), name)
         .input('title', sql.NVarChar(200), title)
@@ -143,7 +149,7 @@ async function setupAndTestSchema(studentId, pool) {
 
       for (let j = 0; j < projectIds.length; j++) {
         const alloc = 30 + ((r + j) * 17) % 70;
-        await req.input('empId', sql.Int, empId)
+        await new sql.Request(tx).input('empId', sql.Int, empId)
           .input('projId', sql.Int, projectIds[j])
           .input('role', sql.NVarChar(200), j === 0 ? 'Developer' : 'Contributor')
           .input('alloc', sql.Int, alloc)
@@ -153,7 +159,7 @@ async function setupAndTestSchema(studentId, pool) {
     }
 
     // complex query per schema
-    const qRes = await req.query(`
+    const qRes = await new sql.Request(tx).query(`
       SELECT d.id, d.name, d.location,
         (SELECT COUNT(*) FROM ${schema}.Employees e WHERE e.dept_id = d.id) AS employeeCount,
         (SELECT ISNULL(AVG(e.salary),0) FROM ${schema}.Employees e WHERE e.dept_id = d.id) AS avgSalary,
@@ -245,4 +251,3 @@ async function run() {
 }
 
 run().catch(err => { console.error('Fatal error', err); process.exit(1); });
-
