@@ -1,20 +1,15 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-// Đảm bảo đường dẫn config đúng với project của bạn
-// Nếu không có file config, bạn có thể thay bằng chuỗi cứng 'http://localhost:5000/api'
 import { API_URL } from '../config';
 
 export default function TeacherView() {
-    // State cho Form thủ công
     const [formData, setFormData] = useState({
         title: '', type: 'DDL_CREATE', content: '', expectedSql: '', verificationScript: ''
     });
 
-    // State cho phần Upload AI
     const [file, setFile] = useState(null);
     const [uploadLoading, setUploadLoading] = useState(false);
 
-    // Xử lý Form thủ công (Code cũ)
     const handleSubmit = async () => {
         try {
             await axios.post(`${API_URL}/questions`, formData);
@@ -23,7 +18,6 @@ export default function TeacherView() {
         } catch(e) { alert(e.message); }
     };
 
-    // Xử lý Upload PDF (Mới)
     const handleUpload = async () => {
         if (!file) return alert("Vui lòng chọn file PDF!");
 
@@ -44,10 +38,9 @@ export default function TeacherView() {
     };
 
     return (
-        <div className="max-w-4xl mx-auto bg-white p-8 rounded-xl shadow-lg">
+        <div className="w-full  bg-white p-8 rounded-xl shadow-lg">
             <h2 className="text-2xl font-bold mb-6 text-green-700 border-b pb-2">Soạn Đề Thi (SQL Server)</h2>
 
-            {/* --- PHẦN 1: UPLOAD PDF CHO AI --- */}
             <div className="mb-8 bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-xl border border-blue-200 shadow-inner">
                 <div className="flex items-center justify-between mb-4">
                     <div>
@@ -88,14 +81,12 @@ export default function TeacherView() {
                 </div>
             </div>
 
-            {/* --- ĐƯỜNG KẺ NGĂN CÁCH --- */}
             <div className="relative flex py-5 items-center">
                 <div className="flex-grow border-t border-gray-300"></div>
                 <span className="flex-shrink-0 mx-4 text-gray-400 font-medium text-sm uppercase tracking-wider">Hoặc nhập thủ công</span>
                 <div className="flex-grow border-t border-gray-300"></div>
             </div>
 
-            {/* --- PHẦN 2: FORM NHẬP TAY (CODE CŨ) --- */}
             <div className="grid gap-5">
                 <div className="grid grid-cols-3 gap-4">
                     <div className="col-span-2">

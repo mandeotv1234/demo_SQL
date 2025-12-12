@@ -2,7 +2,7 @@ import React from 'react';
 
 export default function ScoreBoard({ result, studentId }) {
     return (
-        <div className="max-w-3xl mx-auto mt-10 bg-white p-8 rounded-xl shadow-2xl border-t-8 border-blue-600 text-center">
+        <div className="w-full mx-auto mt-10 bg-white p-8 rounded-xl shadow-2xl border-t-8 border-blue-600 text-center">
             <h2 className="text-3xl font-bold text-gray-800 mb-2">KẾT QUẢ BÀI THI</h2>
             <p className="text-gray-500 mb-6">Sinh viên: {studentId}</p>
 

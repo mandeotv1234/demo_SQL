@@ -31,7 +31,7 @@ async function gradeAllWithAI(pool, schemaName, questions) {
 
         // Gọi AI 1 lần duy nhất
         console.log('Calling AI for batch grading...');
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const result = await model.generateContent(prompt);
         const response = await result.response;
 

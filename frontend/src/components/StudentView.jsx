@@ -10,6 +10,7 @@ export default function StudentView() {
     const [isInit, setIsInit] = useState(false);
     const [submitResult, setSubmitResult] = useState(null);
     const [studentAnswers, setStudentAnswers] = useState({});
+    const [loadingSubmit, setLoadingSubmit] = useState(false);
 
     useEffect(() => {
         axios.get(`${API_URL}/questions`).then(res => setQuestions(res.data));
@@ -31,6 +32,7 @@ export default function StudentView() {
 
     const handleSubmitExam = async () => {
         if (!confirm("Bạn có chắc chắn muốn nộp bài? Hành động này sẽ tính điểm cuối cùng.")) return;
+        setLoadingSubmit(true);
         try {
             // Chuẩn bị dữ liệu gửi lên BE
             const submissionData = {
@@ -42,10 +44,10 @@ export default function StudentView() {
                     studentSql: studentAnswers[q.id] || ''
                 }))
             };
-            
             const res = await axios.post(`${API_URL}/submit-exam`, submissionData);
             setSubmitResult(res.data);
         } catch (e) { alert("Lỗi nộp bài: " + e.message); }
+        setLoadingSubmit(false);
     };
 
     if (!isInit) return (
@@ -58,7 +60,16 @@ export default function StudentView() {
     if (submitResult) return <ScoreBoard result={submitResult} studentId={studentId} />;
 
     return (
-        <div className="max-w-7xl mx-auto">
+        <div className="w-full mx-auto relative">
+            {loadingSubmit && (
+                <div className="fixed inset-0 bg-black bg-opacity-40 z-50 flex items-center justify-center">
+                    <div className="bg-white rounded-xl shadow-lg p-8 flex flex-col items-center">
+                        <div className="animate-spin h-12 w-12 border-4 border-blue-500 border-t-transparent rounded-full mb-4"></div>
+                        <div className="font-bold text-lg text-blue-700">Đang nộp bài và chấm điểm...</div>
+                    </div>
+                </div>
+            )}
+
             <div className="flex justify-between items-center mb-6 bg-white p-4 rounded-lg shadow-sm">
                 <div>
                     <h2 className="font-bold text-lg">Thí sinh: {studentId}</h2>

@@ -35,7 +35,6 @@ router.post('/questions', async (req, res) => {
     }
 });
 
-// Upload PDF -> AI parse -> insert questions
 router.post('/upload-questions', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
     if (!genAI) return res.status(500).json({ error: "AI Key chưa được cấu hình trong server." });
@@ -43,11 +42,9 @@ router.post('/upload-questions', upload.single('file'), async (req, res) => {
     try {
         console.log("PDF received. Sending directly to AI...");
 
-        // 1. Chuyển PDF buffer sang base64
         const pdfBase64 = req.file.buffer.toString('base64');
 
-        // 2. Gọi Gemini AI với file PDF trực tiếp
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
         const prompt = `
             You are a STRICT SQL Server Exam Question Generator.
@@ -160,7 +157,6 @@ router.post('/upload-questions', upload.single('file'), async (req, res) => {
             return res.status(400).json({ error: questions.error });
         }
 
-        // 3. Lưu vào Database
         const pool = await getPool();
         const transaction = new sql.Transaction(pool);
         await transaction.begin();

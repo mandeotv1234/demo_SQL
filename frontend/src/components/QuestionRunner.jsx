@@ -193,6 +193,27 @@ export default function QuestionRunner({ question, index, studentId, onSqlChange
                                         </div>
                                     </div>
                                 )}
+
+                                {/* FUNCTION, PROCEDURE, TRIGGER - Hiển thị kết quả đặc biệt */}
+                                {['FUNCTION','PROCEDURE','TRIGGER'].includes(question.type) && (
+                                    <div className="space-y-2">
+                                        {output.data && (
+                                            <div className="bg-gray-50 border p-2 rounded text-sm">
+                                                <pre>{JSON.stringify(output.data, null, 2)}</pre>
+                                            </div>
+                                        )}
+                                        {output.message && (
+                                            <div className="bg-yellow-50 border p-2 rounded text-sm text-yellow-800">
+                                                {output.message}
+                                            </div>
+                                        )}
+                                        {!output.data && !output.message && (
+                                            <div className="bg-gray-100 border p-2 rounded text-sm text-gray-600">
+                                                Đã thực thi lệnh {question.type}. Nếu là trigger, hãy kiểm tra dữ liệu hoặc thông báo lỗi.
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>

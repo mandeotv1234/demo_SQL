@@ -1,5 +1,3 @@
-
-
 const express = require('express');
 const router = express.Router();
 const { getPool, sql } = require('../config/db');
@@ -27,6 +25,9 @@ router.post('/init-exam', async (req, res) => {
     }
 });
 
+// javascript
+// In `backend/routes/exam.js` replace the run-query handler with the code below.
+
 router.post('/run-query', async (req, res) => {
     const { studentId, questionId, studentSql } = req.body;
     const userName = `user_${studentId}`;
@@ -36,83 +37,145 @@ router.post('/run-query', async (req, res) => {
         const qRes = await pool.request().input('id', sql.Int, questionId).query('SELECT * FROM questions WHERE id = @id');
         if (qRes.recordset.length === 0) return res.status(404).json({ error: "Question not found" });
         const question = qRes.recordset[0];
-        const runScript = `EXECUTE AS USER = '${userName}'; ${studentSql} REVERT;`;
 
         const transaction = new sql.Transaction(pool);
         await transaction.begin();
         const request = new sql.Request(transaction);
+
+        // helpers
+        const escapeForN = s => s.replace(/'/g, "''");
+        const splitBatches = s => (s || '').split(/^\s*GO\s*$/gim).map(b => b.trim()).filter(Boolean);
+
         try {
             let resultData = null, metadata = null;
 
-            if (question.type === 'QUERY_SELECT') {
-                const resRun = await request.query(runScript);
-                resultData = resRun.recordset;
-            } else {
-                await request.query(runScript);
+            // Phân loại lại type FUNC_PROC thành FUNCTION, PROCEDURE, TRIGGER dựa vào expected_sql
+            const funcProcTypes = ['FUNCTION', 'PROCEDURE', 'TRIGGER'];
+            if (funcProcTypes.includes(question.type) || (question.type === 'FUNC_PROC' && question.expected_sql)) {
+                const expectedSql = question.expected_sql.trim();
+                if (expectedSql.startsWith('CREATE FUNCTION')) {
+                    question.type = 'FUNCTION';
+                } else if (expectedSql.startsWith('CREATE PROCEDURE')) {
+                    question.type = 'PROCEDURE';
+                } else if (expectedSql.startsWith('CREATE TRIGGER')) {
+                    question.type = 'TRIGGER';
+                }
             }
 
-            if (question.type === 'DDL_CREATE') {
-                // Xử lý NHIỀU BẢNG - verification_script chứa danh sách bảng cách nhau bởi dấu phẩy
+            // Thực thi câu lệnh SQL của sinh viên
+            if (['DDL_CREATE', 'FUNCTION', 'PROCEDURE', 'TRIGGER'].includes(question.type)) {
+                const batches = splitBatches(studentSql);
+                for (const batch of batches) {
+                    const inner = escapeForN(batch);
+                    console.log(`[${question.type}] [student ${studentId}] Executing batch:`);
+                    console.log(batch);
+                    try {
+                        await request.query(`EXECUTE AS USER = '${userName}'; EXEC(N'${inner}'); REVERT;`);
+                        console.log(`[${question.type}] [student ${studentId}] Batch executed successfully.`);
+                    } catch (err) {
+                        console.error(`[${question.type}] [student ${studentId}] Error executing batch:`);
+                        console.error(err.message);
+                        throw err;
+                    }
+                }
+            } else {
+                const batches = splitBatches(studentSql);
+                for (const batch of batches) {
+                    if (!batch) continue;
+                    await request.query(`EXECUTE AS USER = '${userName}'; ${batch}; REVERT;`);
+                }
+            }
+
+            // Thực thi verification_script cho các loại FUNCTION, PROCEDURE, TRIGGER
+            if (['FUNCTION', 'PROCEDURE'].includes(question.type)) {
+                const verificationBatches = splitBatches(question.verification_script);
+                for (const batch of verificationBatches) {
+                    const replacedBatch = batch.replace(/@SCHEMA/g, schemaName);
+                    const inner = escapeForN(replacedBatch);
+                    console.log(`[${question.type}] [student ${studentId}] Executing verification batch:`);
+                    console.log(replacedBatch);
+                    try {
+                        await request.query(`EXECUTE AS USER = '${userName}'; EXEC(N'${inner}'); REVERT;`);
+                        console.log(`[${question.type}] [student ${studentId}] Verification batch executed successfully.`);
+                    } catch (err) {
+                        console.error(`[${question.type}] [student ${studentId}] Error executing verification batch:`);
+                        console.error(err.message);
+                        throw err;
+                    }
+                }
+            } else if (question.type === 'TRIGGER') {
+                const verificationBatches = splitBatches(question.verification_script);
+                for (const batch of verificationBatches) {
+                    const replacedBatch = batch.replace(/@SCHEMA/g, schemaName);
+                    const inner = escapeForN(replacedBatch);
+                    console.log(`[TRIGGER] [student ${studentId}] Executing verification batch (separate transaction):`);
+                    console.log(replacedBatch);
+                    try {
+                        // Mỗi batch thực thi trong transaction riêng biệt
+                        const triggerPool = await getPool();
+                        const triggerTransaction = new sql.Transaction(triggerPool);
+                        await triggerTransaction.begin();
+                        const triggerRequest = new sql.Request(triggerTransaction);
+                        await triggerRequest.query(`EXECUTE AS USER = '${userName}'; EXEC(N'${inner}'); REVERT;`);
+                        await triggerTransaction.commit();
+                        console.log(`[TRIGGER] [student ${studentId}] Verification batch executed successfully.`);
+                    } catch (err) {
+                        console.error(`[TRIGGER] [student ${studentId}] Error executing verification batch:`);
+                        console.error(err.message);
+                        // Không throw để các batch sau vẫn chạy
+                    }
+                }
+            }
+
+            if (question.type === 'QUERY_SELECT') {
+                const selectRes = await request.query(`EXECUTE AS USER = '${userName}'; ${studentSql}; REVERT;`);
+                resultData = selectRes.recordset;
+            } else if (question.type === 'DDL_CREATE') {
                 const tableNames = question.verification_script.split(',').map(t => t.trim());
                 metadata = [];
-
                 for (const tableName of tableNames) {
                     try {
                         const metaRes = await request.query(`
                             SELECT DISTINCT
                                 '${tableName}' as TABLE_NAME,
-                                c.COLUMN_NAME, 
-                                c.DATA_TYPE, 
+                                c.COLUMN_NAME,
+                                c.DATA_TYPE,
                                 c.CHARACTER_MAXIMUM_LENGTH,
                                 c.ORDINAL_POSITION,
                                 CASE WHEN EXISTS (
-                                    SELECT 1 
+                                    SELECT 1
                                     FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku
-                                    JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc 
-                                        ON ku.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+                                             JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+                                                  ON ku.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
                                     WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
-                                        AND ku.TABLE_SCHEMA = '${schemaName}'
-                                        AND ku.TABLE_NAME = '${tableName}'
-                                        AND ku.COLUMN_NAME = c.COLUMN_NAME
+                                      AND ku.TABLE_SCHEMA = '${schemaName}'
+                                      AND ku.TABLE_NAME = '${tableName}'
+                                      AND ku.COLUMN_NAME = c.COLUMN_NAME
                                 ) THEN 1 ELSE 0 END as IS_PK
                             FROM INFORMATION_SCHEMA.COLUMNS c
-                            WHERE c.TABLE_SCHEMA = '${schemaName}' 
-                                AND c.TABLE_NAME = '${tableName}'
+                            WHERE c.TABLE_SCHEMA = '${schemaName}'
+                              AND c.TABLE_NAME = '${tableName}'
                             ORDER BY c.ORDINAL_POSITION
                         `);
-
-                        if (metaRes.recordset.length > 0) {
-                            metadata = metadata.concat(metaRes.recordset);
-                        }
+                        if (metaRes.recordset.length > 0) metadata = metadata.concat(metaRes.recordset);
                     } catch (e) {
                         console.log(`Table ${tableName} not found or error:`, e.message);
                     }
                 }
-
             } else if (question.type === 'DML_INSERT') {
-                // Xử lý NHIỀU BẢNG - lấy tất cả bảng từ expected_sql
                 const insertStatements = question.expected_sql.match(/INSERT INTO\s+(\w+)/gi) || [];
                 const tableNames = [...new Set(insertStatements.map(stmt => {
                     const match = stmt.match(/INSERT INTO\s+(\w+)/i);
                     return match ? match[1] : null;
                 }))].filter(Boolean);
-
                 resultData = {};
-
                 for (const tableName of tableNames) {
                     try {
                         const dataRes = await request.query(`SELECT * FROM [${schemaName}].[${tableName}]`);
-                        resultData[tableName] = {
-                            rows: dataRes.recordset,
-                            count: dataRes.recordset.length
-                        };
+                        resultData[tableName] = { rows: dataRes.recordset, count: dataRes.recordset.length };
                     } catch (e) {
                         console.log(`Table ${tableName} not found or error:`, e.message);
-                        resultData[tableName] = {
-                            rows: [],
-                            count: 0,
-                            error: e.message
-                        };
+                        resultData[tableName] = { rows: [], count: 0, error: e.message };
                     }
                 }
             }
