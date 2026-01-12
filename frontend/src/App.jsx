@@ -8,7 +8,7 @@ function App() {
     const [view, setView] = useState('home');
 
     return (
-        <div className="min-h-screen bg-gray-100 font-sans text-gray-800">
+        <div className=" bg-gray-100 font-sans text-gray-800">
             <NavBar view={view} setView={setView} />
             <div className="p-6">
                 {view === 'home' && <HomeView />}

@@ -2,7 +2,7 @@ import React from 'react';
 
 export default function HomeView() {
     return (
-        <div className="text-center mt-20 max-w-2xl mx-auto">
+        <div className="text-center mt-20 w-full mx-auto">
             <h1 className="text-4xl font-bold text-gray-800 mb-6">Hệ thống thi CSDL Trực Quan</h1>
             <p className="text-lg text-gray-600 mb-8">
                 Hỗ trợ SQL Server, Schema Isolation. <br/>

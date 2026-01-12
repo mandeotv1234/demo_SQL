@@ -7,7 +7,7 @@ const dbConfig = {
     database: process.env.DB_NAME || 'ExamDB',
     port: parseInt(process.env.DB_PORT || '1433', 10),
     options: { encrypt: false, trustServerCertificate: true },
-    pool: { max: 50, min: 0, idleTimeoutMillis: 30000 }
+    pool: { max: 1000, min: 0, idleTimeoutMillis: 30000 }
 };
 
 async function getPool() {

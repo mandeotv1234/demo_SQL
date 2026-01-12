@@ -1,4 +1,3 @@
-// javascript
 let parser = null;
 
 async function ensureParser() {
